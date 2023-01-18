@@ -71,7 +71,7 @@ CREATE OR REPLACE PACKAGE BODY                 pac_esocial_xml_102 IS
   PROCEDURE sp_carrega_ids(p_id_ctr_processo IN esocial.tsoc_ctr_processo.id_ctr_processo%TYPE) IS
     v_cod_ins NUMBER;
   BEGIN
-    --dalves 18/01/2022
+    --dalves 18/01/2023
     SELECT a.cod_ins
       INTO v_cod_ins
       FROM esocial.tsoc_ctr_processo    a,
