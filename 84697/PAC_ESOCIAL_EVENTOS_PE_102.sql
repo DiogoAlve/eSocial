@@ -20,6 +20,9 @@ CREATE OR REPLACE package         PAC_ESOCIAL_EVENTOS_PE_102 is
     ----------------------------------------------------------------------------------------------- */
 
     PROCEDURE SP_CAD_FOLHA_1207(P_ID_CTR_PROCESSO IN ESOCIAL.TSOC_CTR_PROCESSO.ID_CTR_PROCESSO%TYPE);
+    --TICKET 84697 - DALVES - 18/01/2023
+    --GERA RETIFICAÇÃO DE FOLHA E EVENTO 1207 DE BENEFÍCIOS - ENTES PÚBLICOS
+    PROCEDURE SP_RET_FOLHA_1207(P_ID_CTR_PROCESSO IN ESOCIAL.TSOC_CTR_PROCESSO.ID_CTR_PROCESSO%TYPE);
 
     PROCEDURE SP_1210_RENDIMENTOS(P_ID_CTR_PROCESSO IN ESOCIAL.TSOC_CTR_PROCESSO.ID_CTR_PROCESSO%TYPE);
 
@@ -68,7 +71,11 @@ CREATE OR REPLACE PACKAGE BODY         PAC_ESOCIAL_EVENTOS_PE_102 IS
     GB_FAIXA_FIM_CPF VARCHAR2(11);
     
     --ID APURACAO --TT83733
-    GB_ID_APURACAO TSOC_CTR_PERIODO.ID_APURACAO%TYPE;        
+    GB_ID_APURACAO TSOC_CTR_PERIODO.ID_APURACAO%TYPE;     
+    
+    --INDRETIF --TT84697
+    GB_IND_RETIF TSOC_1207_BENEFICIO.INDRETIF%TYPE;     
+    GB_NR_RECIBO TSOC_1207_BENEFICIO.WS_NUM_RECIBO%TYPE;   
 
 
     TYPE GB_TY_FOLHA IS RECORD (
@@ -187,6 +194,21 @@ CREATE OR REPLACE PACKAGE BODY         PAC_ESOCIAL_EVENTOS_PE_102 IS
           AND F.PER_COMPETENCIA = GB_PER_COMPETENCIA
           AND F.COD_INS      = GB_COD_INS
           AND F.COD_IDE_CLI  = P_COD_IDE_CLI;
+    
+    --Cursor de retificações da Folha
+    CURSOR C_RET_FOLHA(P_FAIXA_INI IN VARCHAR2, P_FAIXA_FIM IN VARCHAR2) IS
+        SELECT DISTINCT R.COD_INS,
+                        F.COD_IDE_CLI,
+                        F.PER_PROCESSO,
+                        F.PER_COMPETENCIA,
+                        F.NUM_CPF,
+                        F.ID_CAD_FOLHA,
+                        F.ID_APURACAO,
+                        R.NR_RECIBO
+        FROM ESOCIAL.TSOC_CTR_RETIFICACAO R, ESOCIAL.TSOC_CAD_FOLHA F
+        WHERE R.COD_INS = F.COD_INS
+        AND R.ID_CAD_FOLHA = F.ID_CAD_FOLHA;
+          
 
 
     PROCEDURE SP_SET_PER_PROCESSO IS
@@ -620,6 +642,62 @@ CREATE OR REPLACE PACKAGE BODY         PAC_ESOCIAL_EVENTOS_PE_102 IS
            P_1207_BENEFICIO.COD_INS);
 
     END SP_INC_1207_BENEFICIO;
+    
+   --TICKET 84697 - DALVES - 18/01/2023
+   PROCEDURE SP_INC_H1207_BENEFICIO(P_ID_CAD_FOLHA IN ESOCIAL.TSOC_1207_BENEFICIO.ID_CAD_FOLHA%TYPE) IS
+    BEGIN
+      INSERT INTO TSOC_H1207_BENEFICIO
+      SELECT b.*, '' FROM TSOC_1207_BENEFICIO b WHERE b.ID_CAD_FOLHA = P_ID_CAD_FOLHA;
+
+    END SP_INC_H1207_BENEFICIO; 
+
+   --TICKET 84697 - DALVES - 18/01/2023
+   PROCEDURE SP_DEL_1207_BENEFICIO(P_ID_CAD_FOLHA IN ESOCIAL.TSOC_1207_BENEFICIO.ID_CAD_FOLHA%TYPE) IS
+     v_id_pk               esocial.tsoc_1207_beneficio.id_pk%type;
+     /*v_id_demonstrativo    esocial.tsoc_cpl_1207_demonstrativo.id_demonstrativo%type;
+     v_id_unidade_n        esocial.tsoc_cpl_1207_orgao_unidade_n.id_unidade_n%type;
+     v_id_proc_retroativo  esocial.tsoc_cpl_1207_proc_retroativo.id_proc_retroativo%type;
+     v_id_retroativo       esocial.tsoc_cpl_1207_retroativo.id_retroativo%type;
+     v_id_org_unidade_r    esocial.tsoc_cpl_1207_orgao_unidade_r.id_org_unidade_r%type;*/
+    BEGIN
+      
+      --busca chave
+      FOR REG IN (
+        select b.id_pk,
+               d.id_demonstrativo,
+               o.id_unidade_n,
+               p.id_proc_retroativo,
+               ro.id_retroativo,
+               ro.id_org_unidade_r
+          from esocial.tsoc_1207_beneficio b,
+               esocial.tsoc_cpl_1207_demonstrativo d,
+               esocial.tsoc_cpl_1207_orgao_unidade_n o,
+               esocial.tsoc_cpl_1207_proc_retroativo p,
+               (select r.id_proc_retroativo, r.id_retroativo, oo.id_org_unidade_r
+                  from esocial.tsoc_cpl_1207_retroativo      r,
+                       esocial.tsoc_cpl_1207_orgao_unidade_r oo
+                 where oo.id_retroativo = r.id_retroativo) ro
+         where b.id_pk = d.id_pk
+           and d.id_demonstrativo = o.id_demonstrativo
+           and d.id_demonstrativo = p.id_demonstrativo(+)
+           and p.id_proc_retroativo = ro.id_proc_retroativo(+)
+           and b.id_cad_folha = P_ID_CAD_FOLHA) LOOP
+      
+      --delete retroativo
+      delete from esocial.tsoc_cpl_1207_rubrica_r where id_org_unidade_r = reg.id_org_unidade_r;
+      delete from esocial.tsoc_cpl_1207_orgao_unidade_r where id_retroativo = reg.id_retroativo;
+      delete from esocial.tsoc_cpl_1207_retroativo where id_proc_retroativo = reg.id_proc_retroativo;
+      delete from esocial.tsoc_cpl_1207_proc_retroativo where id_demonstrativo = reg.id_demonstrativo;
+      --delete folha normal
+      delete from esocial.tsoc_cpl_1207_rubrica_n where id_unidade_n = reg.id_unidade_n;
+      delete from esocial.tsoc_cpl_1207_orgao_unidade_n where id_demonstrativo = reg.id_demonstrativo;
+      v_id_pk := reg.id_pk;
+    END LOOP;
+    --DELETE TSOC 1207
+    delete from esocial.tsoc_cpl_1207_demonstrativo where id_pk = v_id_pk; 
+    delete from esocial.tsoc_1207_beneficio where id_cad_folha = P_ID_CAD_FOLHA;
+    
+    END SP_DEL_1207_BENEFICIO;       
 
     PROCEDURE SP_INC_1207_DEM(P_1207_DEM IN ESOCIAL.TSOC_CPL_1207_DEMONSTRATIVO%ROWTYPE) IS
     BEGIN
@@ -1631,7 +1709,7 @@ END SP_1207_RETROATIVO;
 
 
     PROCEDURE SP_1207_BENEFICIO(P_CAD_FOLHA IN ESOCIAL.TSOC_CAD_FOLHA%ROWTYPE,
-                                o_retorno   in out varchar2) IS     -- v1.02
+                                o_retorno   in out varchar2) IS 
 
         V_1207_BENEFICIO ESOCIAL.TSOC_1207_BENEFICIO%ROWTYPE;
 
@@ -1644,23 +1722,14 @@ END SP_1207_RETROATIVO;
         V_1207_BENEFICIO.SEQ_EVENTO   := 1;
         V_1207_BENEFICIO.COD_INS      := GB_COD_INS;
 
-        -- v1.01 - Início
-        /*
-        IF GB_DAT_EVT_ATU = GB_DAT_EVT_ANT THEN
-          GB_SEQ_CHAVE_ID := GB_SEQ_CHAVE_ID + 1;
-        ELSE
-          GB_SEQ_CHAVE_ID := 1;
-        END IF;
-        */
         SP_RET_INFO_AMBIENTE;
         SP_RET_INSC_EMP;
-        -- v1.01 - Fim
 
         V_1207_BENEFICIO.ID := FC_GERA_ID_EVENTO;
+        
+        --TT84697
+        V_1207_BENEFICIO.INDRETIF    := GB_IND_RETIF;
 
-        V_1207_BENEFICIO.INDRETIF    := 1;
-        --V_1207_BENEFICIO.INDAPURACAO := 1; --Mensal
-        --V_1207_BENEFICIO.PERAPUR     := TO_CHAR(GB_PER_COMPETENCIA, 'YYYY-MM');
         --TT83733
         IF GB_ID_APURACAO = 2 THEN
           V_1207_BENEFICIO.INDAPURACAO := 2;
@@ -1902,9 +1971,10 @@ END SP_1207_RETROATIVO;
                 -- GB_DAT_EVT_ANT := GB_DAT_EVT_ATU;
                 -- GB_DAT_EVT_ATU := TO_CHAR(SYSDATE, 'YYYYMMDDHH24MMSS');
                 -- v1.01 - fim
-
+                GB_IND_RETIF := 1;
+               
                 BEGIN
-                    v_retorno := null;
+                    v_retorno := null;    
                     SP_1207_BENEFICIO(V_CAD_FOLHA,
                                       v_retorno);       -- v1.02
                 EXCEPTION
@@ -2008,6 +2078,173 @@ END SP_1207_RETROATIVO;
             commit;     -- v1.02
 
     END SP_CAD_FOLHA_1207;
+    --TICKET 84697 - DALVES - 18/01/2023
+    --GERA RETIFICAÇÃO DE FOLHA E EVENTO 1207 DE BENEFÍCIOS - ENTES PÚBLICOS
+    PROCEDURE SP_RET_FOLHA_1207(P_ID_CTR_PROCESSO IN ESOCIAL.TSOC_CTR_PROCESSO.ID_CTR_PROCESSO%TYPE) IS
+
+        V_CAD_FOLHA     ESOCIAL.TSOC_CAD_FOLHA%ROWTYPE;
+
+        EX_PARAM_PROC   EXCEPTION;
+        v_retorno       varchar2(4000);
+
+    BEGIN
+
+        --Valida parametrização
+        GB_ID_CTR_PROCESSO := P_ID_CTR_PROCESSO;
+        BEGIN
+            SP_CARREGA_IDS;
+        EXCEPTION
+            WHEN OTHERS THEN
+            RAISE EX_PARAM_PROC;
+        END;
+        --TESTE
+        --SP_SETA_PROCESSO('INICIO_PROCESSAMENTO');
+
+        --commit; -- v1.02
+
+        --Obtém Per processo
+        SP_SET_PER_PROCESSO;
+
+        -- v1.01 - Início
+        SP_RET_INFO_AMBIENTE;
+        SP_RET_INSC_EMP;
+        -- v1.01 - Fim
+
+        --Carrega cursor de retificações RET_FOLHA
+        IF NOT C_RET_FOLHA%ISOPEN THEN
+            OPEN C_RET_FOLHA(GB_FAIXA_INI_CPF,GB_FAIXA_FIM_CPF);
+        END IF;
+        LOOP
+            BEGIN
+
+                FETCH C_RET_FOLHA
+                INTO V_CAD_FOLHA.COD_INS,
+                     V_CAD_FOLHA.COD_IDE_CLI,
+                     V_CAD_FOLHA.PER_PROCESSO,
+                     V_CAD_FOLHA.PER_COMPETENCIA,
+                     V_CAD_FOLHA.NUM_CPF,
+                     V_CAD_FOLHA.ID_CAD_FOLHA,
+                     V_CAD_FOLHA.ID_APURACAO,
+                     GB_NR_RECIBO;
+                     
+
+                EXIT WHEN C_RET_FOLHA%NOTFOUND;
+
+                --GUARDAR O REGISTRO ORIGINAL NA TABELA DE HISTÓRICO
+                SP_INC_H1207_BENEFICIO(V_CAD_FOLHA.ID_CAD_FOLHA);
+                --EXCLUIR O REGISTRO ORIGINAL DA TSOC E CPLS
+                SP_DEL_1207_BENEFICIO(V_CAD_FOLHA.ID_CAD_FOLHA);
+
+                ------------------------------GERA EVENTO-----------------------------
+                --GB_NR_RECIBO := 'WS_NUM_RECIBO';
+                GB_IND_RETIF := 2;
+                
+                BEGIN
+                    v_retorno := null;
+                    SP_1207_BENEFICIO(V_CAD_FOLHA,
+                                      v_retorno); 
+                EXCEPTION
+                    WHEN OTHERS THEN
+                        ROLLBACK;
+                        GB_REC_ERRO.COD_INS           := GB_COD_INS;
+                        GB_REC_ERRO.ID_CAD            := V_CAD_FOLHA.ID_CAD_FOLHA;
+                        GB_REC_ERRO.NOM_PROCESSO      := 'SP_1207_BENEFICIO';
+                        GB_REC_ERRO.ID_EVENTO         := GB_ID_EVENTO;
+                        GB_REC_ERRO.DESC_ERRO         := 'ERRO AO GERAR EVENTO DE FOLHA EM TSOC_1207_BENEFICIO';
+                        GB_REC_ERRO.DESC_ERRO_BD      := SQLERRM;
+                        GB_REC_ERRO.DES_IDENTIFICADOR := V_CAD_FOLHA.COD_IDE_CLI;
+                        GB_REC_ERRO.DET_ERRO          := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
+                        GB_REC_ERRO.FLG_TIPO_ERRO     := 'X';
+                        -- v1.02 - início
+                        -- SP_GERA_ERRO_PROCESSO;
+                        GB_REC_ERRO.ID_CTR_PROCESSO   := GB_ID_CTR_PROCESSO;
+                        SP_GERA_ERRO_PROCESSO_AT(GB_REC_ERRO);
+
+                        continue;
+                        -- v1.02 - fim
+                END;
+
+                -- v1.02 - início
+                -- SP_SETA_PROCESSO('ATUALIZA_QUANTIDADE');     -- Atualiza Quantidade
+                if (v_retorno is null) then
+                    SP_SETA_PROCESSO('ATUALIZA_QUANTIDADE');     -- Atualiza Quantidade
+                    commit;
+                else
+                    rollback;
+                end if;
+                -- v1.02 - fim
+
+            --Exceções
+            EXCEPTION
+                WHEN OTHERS THEN
+                    ROLLBACK;    -- v1.02
+                    GB_REC_ERRO.COD_INS           := GB_COD_INS;
+                    GB_REC_ERRO.ID_CAD            := V_CAD_FOLHA.ID_CAD_FOLHA;
+                    GB_REC_ERRO.NOM_PROCESSO      := 'SP_INC_CAD_FOLHA';
+                    GB_REC_ERRO.ID_EVENTO         := GB_ID_EVENTO;
+                    GB_REC_ERRO.DESC_ERRO         := 'ERRO NA INCLUSÃO DE CADASTRO DE DETALHE DE FOLHA';
+                    GB_REC_ERRO.DESC_ERRO_BD      := SQLERRM;
+                    GB_REC_ERRO.DES_IDENTIFICADOR := V_CAD_FOLHA.COD_IDE_CLI;
+                    GB_REC_ERRO.FLG_TIPO_ERRO     := 'X'; --REGISTRO NÃO CONSTA NA TABELA
+                    GB_REC_ERRO.DET_ERRO          := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
+                    -- v1.02 - início
+                    -- SP_GERA_ERRO_PROCESSO;
+                    GB_REC_ERRO.ID_CTR_PROCESSO   := GB_ID_CTR_PROCESSO;
+                    SP_GERA_ERRO_PROCESSO_AT(GB_REC_ERRO);
+                    -- v1.02 - fim
+            END;
+        END LOOP;
+
+        --Finalizar processo
+
+        SP_SETA_PROCESSO('FIM_PROCESSAMENTO');
+
+        commit;     -- v1.02
+
+    EXCEPTION
+        WHEN EX_PARAM_PROC THEN
+            ROLLBACK;
+            GB_REC_ERRO.COD_INS           := NULL;
+            GB_REC_ERRO.ID_CAD            := NULL;
+            GB_REC_ERRO.NOM_PROCESSO      := 'SP_CAD_FOLHA';
+            GB_REC_ERRO.ID_EVENTO         := GB_ID_EVENTO;
+            GB_REC_ERRO.DESC_ERRO         := 'ERRO NA PARAMETRIZAÇÃO DO PROCESSO';
+            GB_REC_ERRO.DESC_ERRO_BD      := SQLERRM;
+            GB_REC_ERRO.DES_IDENTIFICADOR := NULL;
+            GB_REC_ERRO.FLG_TIPO_ERRO     := 'X';
+            GB_REC_ERRO.DET_ERRO          := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
+            -- v1.02 - início
+            -- SP_GERA_ERRO_PROCESSO;
+            GB_REC_ERRO.ID_CTR_PROCESSO   := GB_ID_CTR_PROCESSO;
+            SP_GERA_ERRO_PROCESSO_AT(GB_REC_ERRO);
+            -- v1.02 - fim
+
+            SP_SETA_PROCESSO('ERRO_PROCESSAMENTO');
+
+            commit;     -- v1.02
+
+        WHEN OTHERS THEN
+            ROLLBACK;
+            GB_REC_ERRO.COD_INS           := GB_COD_INS;
+            GB_REC_ERRO.ID_CAD            := V_CAD_FOLHA.ID_CAD_FOLHA;
+            GB_REC_ERRO.NOM_PROCESSO      := 'SP_INC_CAD_FOLHA';
+            GB_REC_ERRO.ID_EVENTO         := GB_ID_EVENTO;
+            GB_REC_ERRO.DESC_ERRO         := 'ERRO DE EXECUÇÃO NO PROCESSO';
+            GB_REC_ERRO.DESC_ERRO_BD      := SQLERRM;
+            GB_REC_ERRO.DES_IDENTIFICADOR := V_CAD_FOLHA.COD_IDE_CLI;
+            GB_REC_ERRO.FLG_TIPO_ERRO     := 'X'; --REGISTRO NÃO CONSTA NA TABELA
+            GB_REC_ERRO.DET_ERRO          := DBMS_UTILITY.FORMAT_ERROR_BACKTRACE;
+            -- v1.02 - início
+            -- SP_GERA_ERRO_PROCESSO;
+            GB_REC_ERRO.ID_CTR_PROCESSO   := GB_ID_CTR_PROCESSO;
+            SP_GERA_ERRO_PROCESSO_AT(GB_REC_ERRO);
+            -- v1.02 - fim
+
+            SP_SETA_PROCESSO('ERRO_PROCESSAMENTO');
+
+            commit;     -- v1.02
+
+    END SP_RET_FOLHA_1207;
 
 
     FUNCTION FC_GET_IDEDMDEV(P_ID_CAD_FOLHA  NUMBER,
@@ -3654,6 +3891,8 @@ END SP_INSERE_1299;
         sp_ret_insc_emp;
 
         gb_rec_erro.desc_erro := 'ERRO AO TENTAR GERAR EVENTO DE ALTERACAO INDIVIDUAL DE PAGAMENTO DE BENEFICIO';
+        GB_IND_RETIF := 1;
+                        
         v_retorno             := null;
 
         sp_1207_beneficio(v_alt_cad_folha, v_retorno); -- Executa sp_1207_beneficio sem fazer commit
