@@ -207,7 +207,10 @@ CREATE OR REPLACE PACKAGE BODY         PAC_ESOCIAL_EVENTOS_PE_102 IS
                         R.NR_RECIBO
         FROM ESOCIAL.TSOC_CTR_RETIFICACAO R, ESOCIAL.TSOC_CAD_FOLHA F
         WHERE R.COD_INS = F.COD_INS
-        AND R.ID_CAD_FOLHA = F.ID_CAD_FOLHA;
+        AND R.ID_CAD_FOLHA = F.ID_CAD_FOLHA
+        AND R.FLG_STATUS = 'A';
+        --teste
+        --and r.cpf_benef = '00012464880';
           
 
 
@@ -646,8 +649,8 @@ CREATE OR REPLACE PACKAGE BODY         PAC_ESOCIAL_EVENTOS_PE_102 IS
    --TICKET 84697 - DALVES - 18/01/2023
    PROCEDURE SP_INC_H1207_BENEFICIO(P_ID_CAD_FOLHA IN ESOCIAL.TSOC_1207_BENEFICIO.ID_CAD_FOLHA%TYPE) IS
     BEGIN
-      INSERT INTO TSOC_H1207_BENEFICIO
-      SELECT b.*, '' FROM TSOC_1207_BENEFICIO b WHERE b.ID_CAD_FOLHA = P_ID_CAD_FOLHA;
+      INSERT INTO ESOCIAL.TSOC_H1207_BENEFICIO
+      SELECT b.* FROM TSOC_1207_BENEFICIO b WHERE b.ID_CAD_FOLHA = P_ID_CAD_FOLHA;
 
     END SP_INC_H1207_BENEFICIO; 
 
@@ -684,8 +687,21 @@ CREATE OR REPLACE PACKAGE BODY         PAC_ESOCIAL_EVENTOS_PE_102 IS
            and b.id_cad_folha = P_ID_CAD_FOLHA) LOOP
       
       --delete retroativo
-      delete from esocial.tsoc_cpl_1207_rubrica_r where id_org_unidade_r = reg.id_org_unidade_r;
-      delete from esocial.tsoc_cpl_1207_orgao_unidade_r where id_retroativo = reg.id_retroativo;
+      --delete from esocial.tsoc_cpl_1207_rubrica_r where id_org_unidade_r = reg.id_org_unidade_r;
+      delete from esocial.tsoc_cpl_1207_rubrica_r
+       where id_org_unidade_r in
+             (select id_org_unidade_r
+                from esocial.tsoc_cpl_1207_orgao_unidade_r
+               where id_retroativo in
+                     (select id_retroativo
+                        from esocial.tsoc_cpl_1207_retroativo
+                       where id_proc_retroativo = reg.id_proc_retroativo));
+      --delete from esocial.tsoc_cpl_1207_orgao_unidade_r where id_retroativo = reg.id_retroativo;
+      delete from esocial.tsoc_cpl_1207_orgao_unidade_r
+       where id_retroativo in
+             (select id_retroativo
+                from esocial.tsoc_cpl_1207_retroativo
+               where id_proc_retroativo = reg.id_proc_retroativo);
       delete from esocial.tsoc_cpl_1207_retroativo where id_proc_retroativo = reg.id_proc_retroativo;
       delete from esocial.tsoc_cpl_1207_proc_retroativo where id_demonstrativo = reg.id_demonstrativo;
       --delete folha normal
@@ -1756,6 +1772,7 @@ END SP_1207_RETROATIVO;
         V_1207_BENEFICIO.CTR_FLG_STATUS := 'AX';
         V_1207_BENEFICIO.FLG_VIGENCIA   := 'A';
         V_1207_BENEFICIO.ID_PERIODO_DET := GB_ID_PERIODO_DET;
+        V_1207_BENEFICIO.NRRECIBO := GB_NR_RECIBO;
 
         SP_INC_1207_BENEFICIO(V_1207_BENEFICIO);
 
@@ -2097,10 +2114,10 @@ END SP_1207_RETROATIVO;
             WHEN OTHERS THEN
             RAISE EX_PARAM_PROC;
         END;
-        --TESTE
-        --SP_SETA_PROCESSO('INICIO_PROCESSAMENTO');
 
-        --commit; -- v1.02
+        SP_SETA_PROCESSO('INICIO_PROCESSAMENTO');
+
+        commit;
 
         --Obtém Per processo
         SP_SET_PER_PROCESSO;
@@ -2168,6 +2185,11 @@ END SP_1207_RETROATIVO;
                 -- SP_SETA_PROCESSO('ATUALIZA_QUANTIDADE');     -- Atualiza Quantidade
                 if (v_retorno is null) then
                     SP_SETA_PROCESSO('ATUALIZA_QUANTIDADE');     -- Atualiza Quantidade
+                    
+                    UPDATE ESOCIAL.TSOC_CTR_RETIFICACAO T
+                       SET T.FLG_STATUS = 'F'
+                     WHERE T.ID_CAD_FOLHA = V_CAD_FOLHA.ID_CAD_FOLHA;
+
                     commit;
                 else
                     rollback;
